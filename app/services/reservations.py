@@ -651,33 +651,23 @@ def fulfill_line(
 
 
 def expire_due(conn: DBConn, *, limit: int = 500) -> int:
-    due_ids = [
-        r["id"]
-        for r in conn.execute(
-            """
-            SELECT id FROM reservations
-            WHERE status IN ('active', 'partially_fulfilled') AND expires_at <= now()
-            ORDER BY expires_at
-            LIMIT %s
-            """,
-            (limit,),
-        ).fetchall()
-    ]
     expired = 0
-    for reservation_id in due_ids:
+    for _ in range(limit):
         try:
             with conn.transaction():
                 res = conn.execute(
                     """
                     SELECT * FROM reservations
-                    WHERE id = %s AND status IN ('active', 'partially_fulfilled') AND expires_at <= now()
-                    FOR UPDATE
-                    """,
-                    (reservation_id,),
+                    WHERE status IN ('active', 'partially_fulfilled') AND expires_at <= now()
+                    ORDER BY expires_at
+                    LIMIT 1
+                    FOR UPDATE SKIP LOCKED
+                    """
                 ).fetchone()
                 if res is None:
-                    continue
+                    break
 
+                reservation_id = res["id"]
                 lines = conn.execute(
                     """
                     SELECT * FROM reservation_lines

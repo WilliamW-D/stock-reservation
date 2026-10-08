@@ -7,7 +7,7 @@ import pytest
 from app.errors import InvalidTransition
 from app.services import reservations
 from tests.concurrency import Background, run_concurrently, wait_until_blocked
-from tests.conftest import count, stock
+from tests.conftest import count, make_product, stock
 
 
 def new_reservation(conn, actor, product_id, quantity=2, ttl_minutes=30):
@@ -146,3 +146,31 @@ def test_expiry_racing_with_cancel_closes_once(world, conn, new_conn):
             == 1
         )
     assert stock(conn, world.cheese) == (5, 0)
+
+
+def test_concurrent_sweepers_with_skip_locked(world, conn, new_conn):
+    """Multiple sweeper workers run simultaneously on different connections.
+
+    SKIP LOCKED guarantees they partition the work with zero blocking, zero deadlocks,
+    and each expired reservation is closed exactly once.
+    """
+    p = make_product(conn, world.manager, "BULK-EXPIRE", on_hand=50)
+    for i in range(12):
+        rid = reservations.create_reservation(
+            conn, world.eli, product_id=p, quantity=1, order_reference=f"expire-batch-{i}"
+        )["reservation"]["id"]
+        force_past_due(conn, rid)
+
+    clients = [new_conn(), new_conn(), new_conn()]
+    outcomes = run_concurrently(clients, lambda c, _: reservations.expire_due(c, limit=10))
+
+    assert all(o.ok for o in outcomes)
+    total_expired = sum(o.value for o in outcomes)
+    assert total_expired == 12
+    assert stock(conn, p) == (50, 0)
+    assert (
+        count(
+            conn, "SELECT 1 FROM reservations WHERE status = 'expired' AND order_reference LIKE %s", ("expire-batch-%",)
+        )
+        == 12
+    )
