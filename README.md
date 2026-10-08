@@ -1,5 +1,7 @@
 # Cellar — a stock reservation service that cannot oversell
 
+[![CI](https://github.com/WilliamW-D/stock-reservation/actions/workflows/ci.yml/badge.svg)](https://github.com/WilliamW-D/stock-reservation/actions/workflows/ci.yml)
+
 A restaurant has **five cases of cheese** and **five cases of butter**. Employees reserve cases for upcoming
 orders; managers receive deliveries, record spoilage, and inspect audit logs. The web interface is a demo —
 the main value of this project is the **formal correctness guarantees** and the automated tests
