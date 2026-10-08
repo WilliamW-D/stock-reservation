@@ -19,20 +19,22 @@ def record(
     reserved_delta: int,
     inventory_after: Mapping[str, Any],
     reservation_id: int | None = None,
+    reservation_line_id: int | None = None,
     reason: str | None = None,
 ) -> None:
     conn.execute(
         """
-        INSERT INTO audit_events (actor_id, action, product_id, reservation_id,
+        INSERT INTO audit_events (actor_id, action, product_id, reservation_id, reservation_line_id,
                                   on_hand_delta, reserved_delta,
                                   on_hand_after, reserved_after, reason)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """,
         (
             actor_id,
             action,
             product_id,
             reservation_id,
+            reservation_line_id,
             on_hand_delta,
             reserved_delta,
             inventory_after["on_hand_quantity"],

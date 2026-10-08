@@ -14,7 +14,7 @@ import pytest
 from psycopg import sql
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
 
-from app.db import connect, run_migrations
+from app.db import DBConn, connect, run_migrations
 from app.services import inventory, users
 
 TEST_DATABASE_URL = os.getenv("TEST_DATABASE_URL", "postgresql://stock:stock@localhost:5433/stock_test")
@@ -64,7 +64,7 @@ def conn(new_conn) -> psycopg.Connection:
 def clean_database(database_url):
     with connect(database_url) as c:
         c.execute(
-            "TRUNCATE audit_events, idempotency_records, reservations, inventory, products, users "
+            "TRUNCATE audit_events, idempotency_records, reservation_lines, reservations, inventory, products, users "
             "RESTART IDENTITY CASCADE"
         )
     yield
@@ -101,13 +101,13 @@ def count(conn, query: str, params=()) -> int:
     return conn.execute(f"SELECT count(*) AS n FROM ({query}) q", params).fetchone()["n"]
 
 
-def assert_invariants(conn: psycopg.Connection) -> None:
+def assert_invariants(conn: DBConn) -> None:
     """The whole-database check that runs after every test (see INVARIANTS.md)."""
     bad_inventory = conn.execute(
         """
         SELECT i.product_id, i.on_hand_quantity, i.reserved_quantity, i.available_quantity,
-               COALESCE((SELECT sum(quantity) FROM reservations r
-                         WHERE r.product_id = i.product_id AND r.status = 'active'), 0) AS active_sum,
+               COALESCE((SELECT sum(quantity - fulfilled_quantity) FROM reservation_lines rl
+                         WHERE rl.product_id = i.product_id AND rl.status IN ('active', 'partially_fulfilled')), 0) AS active_sum,
                COALESCE((SELECT sum(on_hand_delta) FROM audit_events a WHERE a.product_id = i.product_id), 0)
                    AS audited_on_hand,
                COALESCE((SELECT sum(reserved_delta) FROM audit_events a WHERE a.product_id = i.product_id), 0)
@@ -123,16 +123,18 @@ def assert_invariants(conn: psycopg.Connection) -> None:
         assert row["on_hand_quantity"] == row["audited_on_hand"], f"I6 on_hand not explained by audit: {row}"
         assert row["reserved_quantity"] == row["audited_reserved"], f"I6 reserved not explained by audit: {row}"
 
-    event_counts = conn.execute(
+    line_counts = conn.execute(
         """
-        SELECT r.id, r.status,
+        SELECT rl.id, rl.status,
                count(*) FILTER (WHERE a.action = 'reserve') AS reserves,
                count(*) FILTER (WHERE a.action IN ('cancel', 'fulfill', 'expire')) AS terminals
-        FROM reservations r LEFT JOIN audit_events a ON a.reservation_id = r.id
-        GROUP BY r.id, r.status
+        FROM reservation_lines rl LEFT JOIN audit_events a ON a.reservation_line_id = rl.id
+        GROUP BY rl.id, rl.status
         """
     ).fetchall()
-    for row in event_counts:
-        assert row["reserves"] == 1, f"reservation {row['id']} has {row['reserves']} reserve events"
-        expected_terminals = 0 if row["status"] == "active" else 1
-        assert row["terminals"] == expected_terminals, f"I4 violated for reservation {row['id']}: {row}"
+    for row in line_counts:
+        assert row["reserves"] == 1, f"reservation line {row['id']} has {row['reserves']} reserve events"
+        if row["status"] == "active":
+            assert row["terminals"] == 0, f"active line {row['id']} has terminal event: {row}"
+        elif row["status"] in ("cancelled", "expired", "fulfilled"):
+            assert row["terminals"] >= 1, f"terminal line {row['id']} has no terminal event: {row}"

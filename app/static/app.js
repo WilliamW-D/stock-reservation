@@ -103,10 +103,14 @@ function renderReservations(rows) {
     tr.innerHTML = `<td class="num"></td><td></td><td></td><td class="num"></td>
       <td><span class="pill ${r.status}"></span></td><td class="num"></td><td><div class="actions"></div></td>`;
     const c = tr.children;
+    const qtyText = (r.items && r.items.length > 1)
+      ? r.items.map((it) => `${it.sku || it.name || it.product_id}: ${it.fulfilled_quantity || 0}/${it.quantity}`).join(", ")
+      : (r.quantity ?? (r.items?.[0]?.quantity ?? "—"));
     c[0].textContent = r.id; c[1].textContent = r.order_reference; c[2].textContent = r.username;
-    c[3].textContent = r.quantity; c[4].firstChild.textContent = r.status;
-    c[5].textContent = r.status === "active" ? timeLeft(r.expires_at) : "—";
-    if (r.status === "active") {
+    c[3].textContent = qtyText; c[4].firstChild.textContent = r.status.replace("_", " ");
+    const isPending = r.status === "active" || r.status === "partially_fulfilled";
+    c[5].textContent = isPending ? timeLeft(r.expires_at) : "—";
+    if (isPending) {
       const actions = c[6].firstChild;
       for (const [label, verb, cls] of [["Fulfill", "fulfill", "primary"], ["Cancel", "cancel", "ghost"]]) {
         const b = document.createElement("button");

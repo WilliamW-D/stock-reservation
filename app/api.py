@@ -8,14 +8,14 @@ import threading
 from collections.abc import Iterator
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import Annotated, Literal, Self
 
 import psycopg
 from fastapi import Depends, FastAPI, Header, Query, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.config import Settings
 from app.db import DBConn, create_pool
@@ -31,14 +31,31 @@ Quantity = Annotated[int, Field(strict=True, gt=0, le=MAX_QUANTITY)]
 
 
 # ---------------------------------------------------------------- schemas
-class ReservationCreate(BaseModel):
+class ReservationLineItem(BaseModel):
     product_id: Annotated[int, Field(strict=True, gt=0)]
     quantity: Quantity
+
+
+class ReservationCreate(BaseModel):
     order_reference: Annotated[str, Field(min_length=1, max_length=100)]
     ttl_minutes: Annotated[int, Field(strict=True, ge=1, le=reservations.MAX_TTL_MINUTES)] = 30
+    items: list[ReservationLineItem] | None = None
+    product_id: Annotated[int, Field(strict=True, gt=0)] | None = None
+    quantity: Quantity | None = None
+
+    @model_validator(mode="after")
+    def check_items_or_product(self) -> Self:
+        if not self.items and (self.product_id is None or self.quantity is None):
+            raise ValueError("Either items list or product_id and quantity must be provided")
+        return self
 
 
 class TransitionRequest(BaseModel):
+    reason: Annotated[str | None, Field(max_length=500)] = None
+
+
+class LineTransitionRequest(BaseModel):
+    quantity: Quantity | None = None
     reason: Annotated[str | None, Field(max_length=500)] = None
 
 
@@ -244,14 +261,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # ------------------------------------------------------------ reservations
     @app.post("/reservations", tags=["reservations"], status_code=201)
     def create_reservation(conn: Conn, user: CurrentUser, body: ReservationCreate, key: IdempotencyKey = None):
-        result = reservations.create_reservation_idempotent(conn, user, key, **body.model_dump())
+        items_payload = [it.model_dump() for it in body.items] if body.items else None
+        result = reservations.create_reservation_idempotent(
+            conn,
+            user,
+            key,
+            items=items_payload,
+            product_id=body.product_id,
+            quantity=body.quantity,
+            order_reference=body.order_reference,
+            ttl_minutes=body.ttl_minutes,
+        )
         return idempotent_response(result)
 
     @app.get("/reservations", tags=["reservations"])
     def list_reservations(
         conn: Conn,
         user: CurrentUser,
-        status: Literal["active", "fulfilled", "cancelled", "expired"] | None = None,
+        status: Literal["active", "partially_fulfilled", "fulfilled", "cancelled", "expired"] | None = None,
         limit: Annotated[int, Query(ge=1, le=500)] = 100,
     ):
         return reservations.list_reservations(conn, user, status=status, limit=limit)
@@ -272,6 +299,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.post("/reservations/{reservation_id}/fulfill", tags=["reservations"])
     def fulfill(conn: Conn, user: CurrentUser, reservation_id: int, body: TransitionRequest | None = None):
         return reservations.fulfill(conn, user, reservation_id, body.reason if body else None)
+
+    @app.post("/reservations/{reservation_id}/lines/{line_id}/fulfill", tags=["reservations"])
+    def fulfill_line(
+        conn: Conn,
+        user: CurrentUser,
+        reservation_id: int,
+        line_id: int,
+        body: LineTransitionRequest | None = None,
+    ):
+        qty = body.quantity if body else None
+        reason = body.reason if body else None
+        return reservations.fulfill_line(conn, user, reservation_id, line_id, quantity=qty, reason=reason)
 
     # ------------------------------------------------------------ audit
     @app.get("/audit-events", tags=["audit"])
