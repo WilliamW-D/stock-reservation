@@ -5,6 +5,7 @@
 # CurrentUser, ...) are defined inside create_app().
 import logging
 import threading
+import uuid
 from collections.abc import Iterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -178,6 +179,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             headers={"Retry-After": "1"},
         )
 
+    @app.middleware("http")
+    async def request_id_middleware(request: Request, call_next):
+        req_id = request.headers.get("X-Request-ID") or uuid.uuid4().hex[:16]
+        request.state.request_id = req_id
+        response = await call_next(request)
+        response.headers["X-Request-ID"] = req_id
+        return response
+
     # ------------------------------------------------------------ deps
     oauth2 = OAuth2PasswordBearer(tokenUrl="/auth/token", auto_error=False)
 
@@ -205,10 +214,40 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             headers={"Idempotent-Replayed": "true" if result.replayed else "false"},
         )
 
+    # ------------------------------------------------------------ health & metrics
+    @app.get("/healthz", tags=["system"])
+    def healthz():
+        return {"status": "ok", "environment": settings.environment}
+
+    @app.get("/readyz", tags=["system"])
+    def readyz(conn: Conn):
+        conn.execute("SELECT 1")
+        return {"status": "ready", "database": "connected"}
+
+    @app.get("/metrics", tags=["system"])
+    def get_metrics(conn: Conn):
+        res_counts = conn.execute("SELECT status, count(*) AS count FROM reservations GROUP BY status").fetchall()
+        inv = conn.execute(
+            "SELECT count(*) AS total_products, COALESCE(sum(on_hand_quantity), 0) AS total_on_hand, COALESCE(sum(reserved_quantity), 0) AS total_reserved FROM inventory"
+        ).fetchone()
+        aud = conn.execute("SELECT count(*) AS total_audit_events FROM audit_events").fetchone()
+        idem = conn.execute("SELECT count(*) AS total_idempotency_records FROM idempotency_records").fetchone()
+        return {
+            "inventory": inv,
+            "reservations": {r["status"]: r["count"] for r in res_counts},
+            "audit_events": aud["total_audit_events"] if aud else 0,
+            "idempotency_records": idem["total_idempotency_records"] if idem else 0,
+        }
+
     # ------------------------------------------------------------ auth
     @app.post("/auth/token", tags=["auth"])
-    def login(conn: Conn, form: Annotated[OAuth2PasswordRequestForm, Depends()]):
-        user = users.authenticate(conn, form.username, form.password)
+    def login(request: Request, conn: Conn, form: Annotated[OAuth2PasswordRequestForm, Depends()]):
+        client_ip = (
+            request.headers.get("X-Forwarded-For", request.client.host if request.client else "127.0.0.1")
+            .split(",")[0]
+            .strip()
+        )
+        user = users.authenticate_with_rate_limit(conn, form.username, form.password, ip_address=client_ip)
         if user is None:
             raise AuthenticationError("Incorrect username or password")
         token = create_access_token(

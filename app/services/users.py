@@ -38,3 +38,61 @@ def authenticate(conn: DBConn, username: str, password: str) -> User | None:
     if row is None or not verify_password(password, row["password_hash"]):
         return None
     return _to_user(row)
+
+
+MAX_FAILED_ATTEMPTS = 5
+RATE_LIMIT_WINDOW_MINUTES = 5
+
+
+def check_login_rate_limit(
+    conn: DBConn,
+    ip_address: str,
+    username: str,
+    *,
+    max_attempts: int = MAX_FAILED_ATTEMPTS,
+    window_minutes: int = RATE_LIMIT_WINDOW_MINUTES,
+) -> None:
+    recent_failures = conn.execute(
+        """
+        SELECT count(*) AS n
+        FROM login_attempts
+        WHERE (ip_address = %s OR username = %s)
+          AND success = FALSE
+          AND attempted_at >= now() - make_interval(mins => %s)
+        """,
+        (ip_address, username, window_minutes),
+    ).fetchone()
+    failure_count = recent_failures["n"] if recent_failures else 0
+    if failure_count >= max_attempts:
+        from app.errors import TooManyRequests
+
+        raise TooManyRequests(
+            f"Too many failed login attempts. Try again in {window_minutes} minutes.",
+            max_attempts=max_attempts,
+            window_minutes=window_minutes,
+        )
+
+
+def record_login_attempt(conn: DBConn, ip_address: str, username: str, success: bool) -> None:
+    conn.execute(
+        """
+        INSERT INTO login_attempts (ip_address, username, success)
+        VALUES (%s, %s, %s)
+        """,
+        (ip_address, username, success),
+    )
+
+
+def authenticate_with_rate_limit(
+    conn: DBConn,
+    username: str,
+    password: str,
+    ip_address: str,
+    *,
+    max_attempts: int = MAX_FAILED_ATTEMPTS,
+    window_minutes: int = RATE_LIMIT_WINDOW_MINUTES,
+) -> User | None:
+    check_login_rate_limit(conn, ip_address, username, max_attempts=max_attempts, window_minutes=window_minutes)
+    user = authenticate(conn, username, password)
+    record_login_attempt(conn, ip_address, username, success=user is not None)
+    return user

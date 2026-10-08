@@ -64,7 +64,7 @@ def conn(new_conn) -> psycopg.Connection:
 def clean_database(database_url):
     with connect(database_url) as c:
         c.execute(
-            "TRUNCATE audit_events, idempotency_records, reservation_lines, reservations, inventory, products, users "
+            "TRUNCATE login_attempts, audit_events, idempotency_records, reservation_lines, reservations, inventory, products, users "
             "RESTART IDENTITY CASCADE"
         )
     yield

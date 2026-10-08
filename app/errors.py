@@ -53,3 +53,8 @@ class InvalidRequest(DomainError):
 class DatabaseTimeout(DomainError):
     status_code = 503
     code = "database_timeout"
+
+
+class TooManyRequests(DomainError):
+    status_code = 429
+    code = "too_many_requests"
