@@ -90,7 +90,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        pool = create_pool(settings.database_url, max_size=settings.pool_max_size)
+        pool = create_pool(
+            settings.database_url,
+            max_size=settings.pool_max_size,
+            lock_timeout_ms=settings.lock_timeout_ms,
+            statement_timeout_ms=settings.statement_timeout_ms,
+            idle_in_transaction_timeout_ms=settings.idle_in_transaction_timeout_ms,
+        )
         app.state.pool = pool
         sweeper = None
         if settings.expiry_sweep_seconds > 0:
@@ -134,6 +140,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     "details": {"constraint": getattr(exc.diag, "constraint_name", None)},
                 }
             },
+        )
+
+    @app.exception_handler(psycopg.errors.LockNotAvailable)
+    @app.exception_handler(psycopg.errors.QueryCanceled)
+    async def timeout_handler(_: Request, exc: psycopg.Error):
+        log.warning("Database lock or statement timeout: %s", exc)
+        return JSONResponse(
+            status_code=503,
+            content={
+                "error": {
+                    "code": "database_timeout",
+                    "message": "Operation timed out waiting for database locks. Safe to retry.",
+                    "details": {"sqlstate": getattr(exc.diag, "sqlstate", None)},
+                }
+            },
+            headers={"Retry-After": "1"},
         )
 
     # ------------------------------------------------------------ deps

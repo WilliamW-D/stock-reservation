@@ -12,6 +12,9 @@ class Settings:
     # 0 disables the background expiry sweeper (tests trigger expiry explicitly).
     expiry_sweep_seconds: int = 15
     pool_max_size: int = 20
+    lock_timeout_ms: int = 2500
+    statement_timeout_ms: int = 5000
+    idle_in_transaction_timeout_ms: int = 10000
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -22,4 +25,9 @@ class Settings:
             jwt_ttl_minutes=int(os.getenv("JWT_TTL_MINUTES", defaults.jwt_ttl_minutes)),
             expiry_sweep_seconds=int(os.getenv("EXPIRY_SWEEP_SECONDS", defaults.expiry_sweep_seconds)),
             pool_max_size=int(os.getenv("DB_POOL_MAX_SIZE", defaults.pool_max_size)),
+            lock_timeout_ms=int(os.getenv("DB_LOCK_TIMEOUT_MS", defaults.lock_timeout_ms)),
+            statement_timeout_ms=int(os.getenv("DB_STATEMENT_TIMEOUT_MS", defaults.statement_timeout_ms)),
+            idle_in_transaction_timeout_ms=int(
+                os.getenv("DB_IDLE_TIMEOUT_MS", defaults.idle_in_transaction_timeout_ms)
+            ),
         )

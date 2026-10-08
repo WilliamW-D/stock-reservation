@@ -48,3 +48,8 @@ class IdempotencyConflict(DomainError):
 class InvalidRequest(DomainError):
     status_code = 422
     code = "invalid_request"
+
+
+class DatabaseTimeout(DomainError):
+    status_code = 503
+    code = "database_timeout"

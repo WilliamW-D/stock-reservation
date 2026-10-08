@@ -10,18 +10,34 @@ SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 type DBConn = psycopg.Connection[dict[str, Any]]
 
 
-def create_pool(database_url: str, *, max_size: int = 20) -> ConnectionPool[DBConn]:
-    """Connections run in autocommit mode.
+def create_pool(
+    database_url: str,
+    *,
+    max_size: int = 20,
+    lock_timeout_ms: int = 2500,
+    statement_timeout_ms: int = 5000,
+    idle_in_transaction_timeout_ms: int = 10000,
+) -> ConnectionPool[DBConn]:
+    """Connections run in autocommit mode with bounded lock and statement timeouts.
 
     Nothing is ever left in an implicit transaction: every multi-statement
     operation opens an explicit ``with conn.transaction():`` block, so the
     transaction boundary is visible in the code that needs it.
     """
+
+    def configure_conn(conn: DBConn) -> None:
+        conn.execute(
+            f"SET lock_timeout = '{lock_timeout_ms}ms'; "
+            f"SET statement_timeout = '{statement_timeout_ms}ms'; "
+            f"SET idle_in_transaction_session_timeout = '{idle_in_transaction_timeout_ms}ms';"
+        )
+
     return ConnectionPool(
         database_url,
         min_size=1,
         max_size=max_size,
         kwargs={"autocommit": True, "row_factory": dict_row},
+        configure=configure_conn,
         open=True,
     )
 
