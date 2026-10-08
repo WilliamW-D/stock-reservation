@@ -45,7 +45,6 @@ jobs:
           uv run ruff check .
           uv run ruff format --check .
           uv run mypy app
-        continue-on-error: true
 
       - name: Run test suite (with repeated concurrency stress runs)
         env:

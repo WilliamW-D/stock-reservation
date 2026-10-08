@@ -9,7 +9,7 @@ from __future__ import annotations
 import sys
 
 from app.config import Settings
-from app.db import apply_schema, connect
+from app.db import connect, run_migrations
 from app.services import inventory, users
 
 DEMO_USERS = [
@@ -21,14 +21,13 @@ CHEESE_SKU = "CHEESE-CHEDDAR-CASE"
 
 
 def init_db(url: str) -> None:
-    with connect(url) as conn:
-        apply_schema(conn)
-    print("schema applied")
+    run_migrations(url)
+    print("schema and migrations applied")
 
 
 def seed(url: str) -> None:
+    run_migrations(url)
     with connect(url) as conn:
-        apply_schema(conn)
         for username, password, role in DEMO_USERS:
             if users.get_user_by_username(conn, username) is None:
                 users.create_user(conn, username, password, role)

@@ -9,10 +9,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/uv
 
-COPY pyproject.toml uv.lock .python-version ./
+COPY pyproject.toml uv.lock ./
 
 ENV UV_COMPILE_BYTECODE=1
-RUN uv sync --frozen --no-dev --no-install-project
+RUN uv sync --python /usr/local/bin/python --frozen --no-dev --no-install-project
 
 # ------------------------------------------------------------------ runner
 FROM python:3.12-slim AS runner

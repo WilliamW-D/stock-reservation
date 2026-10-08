@@ -34,28 +34,49 @@ CREATE TABLE IF NOT EXISTS inventory (
 
 CREATE TABLE IF NOT EXISTS reservations (
     id              BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    product_id      BIGINT      NOT NULL REFERENCES products (id),
     user_id         BIGINT      NOT NULL REFERENCES users (id),
     order_reference TEXT        NOT NULL CHECK (length(order_reference) BETWEEN 1 AND 100),
-    quantity        INTEGER     NOT NULL CHECK (quantity > 0),
+    product_id      BIGINT      REFERENCES products (id),
+    quantity        INTEGER     CHECK (quantity > 0),
     status          TEXT        NOT NULL DEFAULT 'active'
-                                CHECK (status IN ('active', 'fulfilled', 'cancelled', 'expired')),
+                                CHECK (status IN ('active', 'partially_fulfilled', 'fulfilled', 'cancelled', 'expired')),
     expires_at      TIMESTAMPTZ NOT NULL,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
     closed_at       TIMESTAMPTZ,
-    -- A reservation is closed exactly when it has left the 'active' state.
-    CONSTRAINT reservations_closed_at_matches_status CHECK ((status = 'active') = (closed_at IS NULL))
+    CONSTRAINT reservations_closed_at_matches_status CHECK (
+        (status IN ('active', 'partially_fulfilled')) = (closed_at IS NULL)
+    )
 );
 
 CREATE INDEX IF NOT EXISTS reservations_active_expiry_idx
-    ON reservations (expires_at) WHERE status = 'active';
+    ON reservations (expires_at) WHERE status IN ('active', 'partially_fulfilled');
 CREATE INDEX IF NOT EXISTS reservations_user_idx
     ON reservations (user_id, id DESC);
 
--- I5: the primary key is what makes concurrent duplicates safe. A second
--- transaction inserting the same (user_id, key) blocks until the first commits.
--- response_* are NULL only inside the claiming transaction, which no one else can see.
+CREATE TABLE IF NOT EXISTS reservation_lines (
+    id                 BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    reservation_id     BIGINT      NOT NULL REFERENCES reservations (id) ON DELETE CASCADE,
+    product_id         BIGINT      NOT NULL REFERENCES products (id),
+    quantity           INTEGER     NOT NULL CHECK (quantity > 0),
+    fulfilled_quantity INTEGER     NOT NULL DEFAULT 0 CHECK (fulfilled_quantity >= 0),
+    status             TEXT        NOT NULL DEFAULT 'active'
+                                   CHECK (status IN ('active', 'partially_fulfilled', 'fulfilled', 'cancelled', 'expired')),
+    created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+    closed_at          TIMESTAMPTZ,
+    CONSTRAINT lines_fulfilled_within_quantity CHECK (fulfilled_quantity <= quantity),
+    CONSTRAINT lines_closed_matches_status CHECK (
+        (status IN ('active', 'partially_fulfilled')) = (closed_at IS NULL)
+    )
+);
+
+CREATE INDEX IF NOT EXISTS reservation_lines_reservation_idx
+    ON reservation_lines (reservation_id);
+CREATE INDEX IF NOT EXISTS reservation_lines_product_active_idx
+    ON reservation_lines (product_id) WHERE status IN ('active', 'partially_fulfilled');
+
+-- I5: the primary key is what makes concurrent duplicates safe.
 CREATE TABLE IF NOT EXISTS idempotency_records (
     user_id             BIGINT      NOT NULL REFERENCES users (id),
     idempotency_key     TEXT        NOT NULL CHECK (length(idempotency_key) BETWEEN 1 AND 255),
@@ -63,22 +84,27 @@ CREATE TABLE IF NOT EXISTS idempotency_records (
     response_status     INTEGER,
     response_body       JSONB,
     created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    expires_at          TIMESTAMPTZ NOT NULL DEFAULT (now() + interval '24 hours'),
     PRIMARY KEY (user_id, idempotency_key)
 );
 
+CREATE INDEX IF NOT EXISTS idempotency_records_expires_at_idx
+    ON idempotency_records (expires_at);
+
 CREATE TABLE IF NOT EXISTS audit_events (
-    id              BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    actor_id        BIGINT      REFERENCES users (id),  -- NULL = system (expiry sweeper)
-    action          TEXT        NOT NULL
-                                CHECK (action IN ('reserve', 'cancel', 'expire', 'fulfill', 'receive', 'adjust')),
-    product_id      BIGINT      NOT NULL REFERENCES products (id),
-    reservation_id  BIGINT      REFERENCES reservations (id),
-    on_hand_delta   INTEGER     NOT NULL,
-    reserved_delta  INTEGER     NOT NULL,
-    on_hand_after   INTEGER     NOT NULL,
-    reserved_after  INTEGER     NOT NULL,
-    reason          TEXT,
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+    id                  BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    actor_id            BIGINT      REFERENCES users (id),  -- NULL = system (expiry sweeper)
+    action              TEXT        NOT NULL
+                                    CHECK (action IN ('reserve', 'cancel', 'expire', 'fulfill', 'receive', 'adjust')),
+    product_id          BIGINT      NOT NULL REFERENCES products (id),
+    reservation_id      BIGINT      REFERENCES reservations (id),
+    reservation_line_id BIGINT      REFERENCES reservation_lines (id),
+    on_hand_delta       INTEGER     NOT NULL,
+    reserved_delta      INTEGER     NOT NULL,
+    on_hand_after       INTEGER     NOT NULL,
+    reserved_after      INTEGER     NOT NULL,
+    reason              TEXT,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
     CONSTRAINT audit_events_changes_stock CHECK (on_hand_delta <> 0 OR reserved_delta <> 0)
 );
 
@@ -95,3 +121,15 @@ $$;
 CREATE OR REPLACE TRIGGER audit_events_append_only
     BEFORE UPDATE OR DELETE ON audit_events
     FOR EACH ROW EXECUTE FUNCTION forbid_audit_mutation();
+
+-- PostgreSQL-backed rate limiting for login attempts.
+CREATE TABLE IF NOT EXISTS login_attempts (
+    id           BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    ip_address   TEXT        NOT NULL,
+    username     TEXT        NOT NULL,
+    success      BOOLEAN     NOT NULL,
+    attempted_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS login_attempts_window_idx
+    ON login_attempts (ip_address, username, attempted_at DESC);
