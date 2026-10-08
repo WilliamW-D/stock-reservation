@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from app.errors import IdempotencyConflict, InsufficientStock, InvalidRequest
-from app.services import inventory, reservations
+from app.services import idempotency, inventory, reservations
 from tests.concurrency import Background, run_concurrently, wait_until_blocked
 from tests.conftest import count, stock
 
@@ -92,3 +92,43 @@ def test_failed_attempt_does_not_burn_the_key(world, conn):
     retry = reserve(conn, world.eli, "big-order", world.cheese, quantity=8)
     assert retry.replayed is False and retry.status_code == 201
     assert stock(conn, world.cheese) == (10, 8)
+
+
+def test_expired_idempotency_key_is_treated_as_fresh(world, conn):
+    """After a key's retention window expires, reusing the key is accepted as a new operation."""
+    key = "ttl-key-1"
+    first = reserve(conn, world.eli, key, world.cheese, quantity=1)
+    assert first.replayed is False
+    first_res_id = first.body["reservation"]["id"]
+
+    # Replay while unexpired -> replayed is True
+    unexpired_replay = reserve(conn, world.eli, key, world.cheese, quantity=1)
+    assert unexpired_replay.replayed is True
+    assert unexpired_replay.body["reservation"]["id"] == first_res_id
+
+    # Force expiration of the key
+    conn.execute(
+        "UPDATE idempotency_records SET expires_at = now() - interval '1 second' WHERE idempotency_key = %s", (key,)
+    )
+
+    # Replay after expiration -> treated as fresh request!
+    fresh = reserve(conn, world.eli, key, world.cheese, quantity=2)
+    assert fresh.replayed is False
+    assert fresh.body["reservation"]["id"] != first_res_id
+    assert stock(conn, world.cheese) == (5, 3)
+
+
+def test_cleanup_expired_idempotency_records(world, conn):
+    """Background cleanup purges expired records in batches using SKIP LOCKED."""
+    reserve(conn, world.eli, "live-key", world.cheese, quantity=1)
+    reserve(conn, world.eli, "dead-key-1", world.cheese, quantity=1)
+    reserve(conn, world.eli, "dead-key-2", world.cheese, quantity=1)
+
+    conn.execute(
+        "UPDATE idempotency_records SET expires_at = now() - interval '1 second' WHERE idempotency_key LIKE 'dead-%'"
+    )
+
+    purged = idempotency.cleanup_expired(conn, limit=10)
+    assert purged == 2
+    assert count(conn, "SELECT 1 FROM idempotency_records WHERE idempotency_key LIKE %s", ("dead-%",)) == 0
+    assert count(conn, "SELECT 1 FROM idempotency_records WHERE idempotency_key = 'live-key'") == 1

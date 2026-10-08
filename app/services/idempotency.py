@@ -50,6 +50,9 @@ def fingerprint(scope: str, payload: dict[str, Any]) -> str:
     return hashlib.sha256(canonical.encode()).hexdigest()
 
 
+DEFAULT_TTL_HOURS = 24
+
+
 def run_idempotent(
     conn: DBConn,
     *,
@@ -58,6 +61,7 @@ def run_idempotent(
     scope: str,
     payload: dict[str, Any],
     operation: Callable[[], tuple[int, dict[str, Any]]],
+    ttl_hours: int = DEFAULT_TTL_HOURS,
 ) -> IdempotentResult:
     key = validate_key(key)
     request_fingerprint = fingerprint(scope, payload)
@@ -65,26 +69,42 @@ def run_idempotent(
     with conn.transaction():
         claimed = conn.execute(
             """
-            INSERT INTO idempotency_records (user_id, idempotency_key, request_fingerprint)
-            VALUES (%s, %s, %s)
+            INSERT INTO idempotency_records (user_id, idempotency_key, request_fingerprint, expires_at)
+            VALUES (%s, %s, %s, now() + make_interval(hours => %s))
             ON CONFLICT (user_id, idempotency_key) DO NOTHING
             RETURNING 1
             """,
-            (user_id, key, request_fingerprint),
+            (user_id, key, request_fingerprint, ttl_hours),
         ).fetchone()
 
         if claimed is None:
-            # Under READ COMMITTED this new statement sees the committed winner.
             existing = conn.execute(
                 """
-                SELECT request_fingerprint, response_status, response_body
+                SELECT request_fingerprint, response_status, response_body,
+                       (expires_at <= now()) AS is_expired
                 FROM idempotency_records
                 WHERE user_id = %s AND idempotency_key = %s
+                FOR UPDATE
                 """,
                 (user_id, key),
             ).fetchone()
-            if existing is None or existing["response_status"] is None:  # defensive; not reachable
+            if existing is None or (existing["response_status"] is None and not existing["is_expired"]):
                 raise IdempotencyConflict("Idempotency key is in an unexpected state; retry")
+
+            # Expired key: treat as a fresh request (standard industry retention semantics)
+            if existing["is_expired"]:
+                status_code, body = operation()
+                conn.execute(
+                    """
+                    UPDATE idempotency_records
+                    SET request_fingerprint = %s, response_status = %s, response_body = %s,
+                        created_at = now(), expires_at = now() + make_interval(hours => %s)
+                    WHERE user_id = %s AND idempotency_key = %s
+                    """,
+                    (request_fingerprint, status_code, Jsonb(body), ttl_hours, user_id, key),
+                )
+                return IdempotentResult(status_code, body, replayed=False)
+
             if existing["request_fingerprint"] != request_fingerprint:
                 raise IdempotencyConflict(
                     "This Idempotency-Key was already used with a different request",
@@ -103,3 +123,24 @@ def run_idempotent(
             (status_code, Jsonb(body), user_id, key),
         )
         return IdempotentResult(status_code, body, replayed=False)
+
+
+def cleanup_expired(conn: DBConn, limit: int = 1000) -> int:
+    """Purge expired idempotency records in batches using SKIP LOCKED."""
+    deleted = conn.execute(
+        """
+        WITH to_delete AS (
+            SELECT user_id, idempotency_key
+            FROM idempotency_records
+            WHERE expires_at <= now()
+            LIMIT %s
+            FOR UPDATE SKIP LOCKED
+        )
+        DELETE FROM idempotency_records i
+        USING to_delete d
+        WHERE i.user_id = d.user_id AND i.idempotency_key = d.idempotency_key
+        RETURNING 1
+        """,
+        (limit,),
+    ).fetchall()
+    return len(deleted)

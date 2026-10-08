@@ -95,8 +95,11 @@ class ExpirySweeper(threading.Thread):
             try:
                 with self.pool.connection() as conn:
                     n = reservations.expire_due(conn)
+                    cleaned = idempotency.cleanup_expired(conn)
                 if n:
                     log.info("expired %d reservation(s)", n)
+                if cleaned:
+                    log.info("cleaned %d expired idempotency record(s)", cleaned)
             except Exception:  # keep sweeping; one bad pass must not kill the thread
                 log.exception("expiry sweep failed")
 
