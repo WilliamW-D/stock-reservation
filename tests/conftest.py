@@ -128,7 +128,9 @@ def assert_invariants(conn: DBConn) -> None:
         SELECT rl.id, rl.status,
                count(*) FILTER (WHERE a.action = 'reserve') AS reserves,
                count(*) FILTER (WHERE a.action IN ('cancel', 'fulfill', 'expire')) AS terminals
-        FROM reservation_lines rl LEFT JOIN audit_events a ON a.reservation_line_id = rl.id
+        FROM reservation_lines rl
+        LEFT JOIN audit_events a
+          ON (a.reservation_line_id = rl.id OR (a.reservation_line_id IS NULL AND a.reservation_id = rl.reservation_id))
         GROUP BY rl.id, rl.status
         """
     ).fetchall()
