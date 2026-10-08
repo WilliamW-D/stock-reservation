@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Cellar — Stock Reservation Service</title>
+  <meta name="description" content="Live demo of a stock reservation service that cannot oversell: atomic PostgreSQL updates, idempotent retries, and race-safe transitions." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <div class="aurora" aria-hidden="true"></div>
+
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark">◆</span>
+      <div>
+        <div class="brand-name">Cellar</div>
+        <div class="brand-sub">Stock reservation service</div>
+      </div>
+    </div>
+    <nav class="users" id="user-switcher" aria-label="Sign in as">
+      <button class="user-chip" id="login-maria" data-user="maria" data-pass="manager-pass">
+        <span class="avatar m">M</span><span>Maria<small>manager</small></span>
+      </button>
+      <button class="user-chip" id="login-eli" data-user="eli" data-pass="employee-pass">
+        <span class="avatar e">E</span><span>Eli<small>employee</small></span>
+      </button>
+      <button class="user-chip" id="login-erin" data-user="erin" data-pass="employee-pass">
+        <span class="avatar r">R</span><span>Erin<small>employee</small></span>
+      </button>
+    </nav>
+  </header>
+
+  <main class="layout">
+    <section class="hero card" aria-labelledby="hero-title">
+      <div class="hero-head">
+        <div>
+          <p class="eyebrow" id="product-sku">—</p>
+          <h1 id="hero-title"><span id="product-name">Loading…</span></h1>
+        </div>
+        <select id="product-select" aria-label="Product"></select>
+      </div>
+      <div class="metrics">
+        <div class="metric">
+          <span class="metric-label">Physical</span>
+          <span class="metric-value" id="m-onhand">–</span>
+          <span class="metric-unit" id="m-unit-1">cases</span>
+        </div>
+        <div class="metric">
+          <span class="metric-label">Reserved</span>
+          <span class="metric-value reserved" id="m-reserved">–</span>
+          <span class="metric-unit">promised</span>
+        </div>
+        <div class="metric">
+          <span class="metric-label">Available</span>
+          <span class="metric-value available" id="m-available">–</span>
+          <span class="metric-unit">physical − reserved</span>
+        </div>
+      </div>
+      <div class="stockbar" id="stockbar" aria-hidden="true"></div>
+      <p class="invariant" id="invariant-line">0 ≤ reserved ≤ physical</p>
+    </section>
+
+    <section class="card" aria-labelledby="reserve-title">
+      <h2 id="reserve-title">Reserve</h2>
+      <form id="reserve-form" class="form">
+        <label>Quantity
+          <div class="stepper">
+            <button type="button" id="qty-dec" aria-label="Decrease">−</button>
+            <input id="reserve-qty" type="number" value="1" min="1" step="1" />
+            <button type="button" id="qty-inc" aria-label="Increase">+</button>
+          </div>
+        </label>
+        <label>Order reference
+          <input id="reserve-order" type="text" value="Table 12 — mac &amp; cheese" maxlength="100" />
+        </label>
+        <label>Expires in (minutes)
+          <input id="reserve-ttl" type="number" value="30" min="1" />
+        </label>
+        <div class="keybox">
+          <span>Idempotency-Key</span>
+          <code id="idem-key">—</code>
+          <button type="button" class="ghost small" id="new-key">New key</button>
+        </div>
+        <div class="row">
+          <button type="submit" class="primary" id="reserve-submit">Reserve</button>
+          <button type="button" class="ghost" id="reserve-retry" title="Resend the exact same request with the same key">Retry same request</button>
+        </div>
+      </form>
+    </section>
+
+    <section class="card" aria-labelledby="race-title">
+      <h2 id="race-title">Race lab</h2>
+      <p class="muted">Fire simultaneous requests at the API. The database decides; the numbers never lie.</p>
+      <label class="range">Concurrent requests <strong id="race-n-label">10</strong>
+        <input id="race-n" type="range" min="2" max="30" value="10" />
+      </label>
+      <div class="row wrap">
+        <button class="primary" id="race-distinct">Race: N clients × 1 unit</button>
+        <button class="ghost" id="race-duplicate">Double-click: N × same key</button>
+      </div>
+      <div class="race-grid" id="race-grid" aria-live="polite"></div>
+      <p class="race-summary" id="race-summary"></p>
+    </section>
+
+    <section class="card" aria-labelledby="manager-title">
+      <h2 id="manager-title">Manager desk</h2>
+      <p class="muted">Permissions are enforced by the backend. Try these as an employee.</p>
+      <form id="receive-form" class="inline-form">
+        <input id="receive-qty" type="number" value="5" min="1" aria-label="Delivery quantity" />
+        <button class="primary" id="receive-submit">Receive delivery</button>
+      </form>
+      <form id="adjust-form" class="inline-form">
+        <input id="adjust-qty" type="number" value="1" min="1" aria-label="Spoiled quantity" />
+        <input id="adjust-reason" type="text" value="Mould found" aria-label="Reason" />
+        <button class="danger" id="adjust-submit">Record spoilage</button>
+      </form>
+      <button class="ghost" id="expire-now">Expire due reservations</button>
+    </section>
+
+    <section class="card span-2" aria-labelledby="res-title">
+      <div class="card-head">
+        <h2 id="res-title">Reservations</h2>
+        <span class="muted" id="res-scope"></span>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>#</th><th>Order</th><th>Who</th><th>Qty</th><th>Status</th><th>Expires</th><th></th></tr></thead>
+          <tbody id="res-body"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="card" aria-labelledby="log-title">
+      <h2 id="log-title">Request log</h2>
+      <ol class="log" id="log"></ol>
+    </section>
+
+    <section class="card span-3" aria-labelledby="audit-title">
+      <div class="card-head">
+        <h2 id="audit-title">Audit trail</h2>
+        <span class="muted">Append-only · every stock change, in the same transaction</span>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>#</th><th>When</th><th>Actor</th><th>Action</th><th>Res.</th><th>Δ physical</th><th>Δ reserved</th><th>After</th><th>Reason</th></tr></thead>
+          <tbody id="audit-body"></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <div class="toasts" id="toasts" aria-live="assertive"></div>
+  <script src="/static/app.js" type="module"></script>
+</body>
+</html>

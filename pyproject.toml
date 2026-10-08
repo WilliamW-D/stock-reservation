@@ -1,0 +1,23 @@
+[project]
+name = "stock-reservation"
+version = "0.1.0"
+description = "Stock reservation service with explicit, tested correctness guarantees (FastAPI + PostgreSQL)."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+    "psycopg[binary,pool]>=3.2.11",
+    "pyjwt>=2.9",
+    "python-multipart>=0.0.9",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "httpx>=0.27",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"

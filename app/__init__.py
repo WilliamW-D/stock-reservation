@@ -1,0 +1,1 @@
+"""Stock reservation service."""
