@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: stock
+          POSTGRES_PASSWORD: stock
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          version: "latest"
+
+      - name: Set up Python
+        run: uv python install
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Run lint & typecheck
+        run: |
+          uv run ruff check .
+          uv run ruff format --check .
+          uv run mypy app
+        continue-on-error: true
+
+      - name: Run test suite (with repeated concurrency stress runs)
+        env:
+          TEST_DATABASE_URL: postgresql://stock:stock@localhost:5432/stock_test
+        run: |
+          # 3 passes to prove concurrency tests remain reliable in CI environments
+          for i in 1 2 3; do
+            echo "--- Test Run Pass $i ---"
+            uv run pytest -q -p no:warnings
+          done

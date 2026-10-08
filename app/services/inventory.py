@@ -1,9 +1,8 @@
-"""Products and physical stock: receive deliveries, record adjustments (spoilage)."""
-
 from __future__ import annotations
 
-import psycopg
+from typing import Any
 
+from app.db import DBConn
 from app.errors import InsufficientStock, InvalidRequest, NotFound
 from app.services import audit
 from app.services.common import MAX_QUANTITY, User, inventory_out, require_manager, require_positive_quantity
@@ -11,7 +10,7 @@ from app.services.common import MAX_QUANTITY, User, inventory_out, require_manag
 INVENTORY_COLUMNS = "product_id, on_hand_quantity, reserved_quantity, available_quantity"
 
 
-def create_product(conn: psycopg.Connection, actor: User, *, sku: str, name: str, unit: str) -> dict:
+def create_product(conn: DBConn, actor: User, *, sku: str, name: str, unit: str) -> dict:
     require_manager(actor)
     sku, name, unit = sku.strip(), name.strip(), unit.strip()
     if not sku or not name or not unit:
@@ -28,10 +27,10 @@ def create_product(conn: psycopg.Connection, actor: User, *, sku: str, name: str
     return get_inventory(conn, product["id"])
 
 
-def get_inventory(conn: psycopg.Connection, product_id: int) -> dict:
+def get_inventory(conn: DBConn, product_id: int) -> dict:
     row = conn.execute(
         f"""
-        SELECT i.{INVENTORY_COLUMNS.replace(', ', ', i.')}, p.sku, p.name, p.unit
+        SELECT i.{INVENTORY_COLUMNS.replace(", ", ", i.")}, p.sku, p.name, p.unit
         FROM inventory i JOIN products p ON p.id = i.product_id
         WHERE i.product_id = %s
         """,
@@ -42,10 +41,10 @@ def get_inventory(conn: psycopg.Connection, product_id: int) -> dict:
     return inventory_out(row)
 
 
-def list_inventory(conn: psycopg.Connection) -> list[dict]:
+def list_inventory(conn: DBConn) -> list[dict]:
     rows = conn.execute(
         f"""
-        SELECT i.{INVENTORY_COLUMNS.replace(', ', ', i.')}, p.sku, p.name, p.unit
+        SELECT i.{INVENTORY_COLUMNS.replace(", ", ", i.")}, p.sku, p.name, p.unit
         FROM inventory i JOIN products p ON p.id = i.product_id
         ORDER BY p.sku
         """
@@ -53,11 +52,9 @@ def list_inventory(conn: psycopg.Connection) -> list[dict]:
     return [inventory_out(r) for r in rows]
 
 
-def raise_unavailable(conn: psycopg.Connection, product_id: int, message: str, **details) -> None:
+def raise_unavailable(conn: DBConn, product_id: int, message: str, **details: Any) -> None:
     """A conditional UPDATE matched no row: distinguish unknown product from insufficient stock."""
-    current = conn.execute(
-        f"SELECT {INVENTORY_COLUMNS} FROM inventory WHERE product_id = %s", (product_id,)
-    ).fetchone()
+    current = conn.execute(f"SELECT {INVENTORY_COLUMNS} FROM inventory WHERE product_id = %s", (product_id,)).fetchone()
     if current is None:
         raise NotFound("Product not found", product_id=product_id)
     raise InsufficientStock(
@@ -70,7 +67,7 @@ def raise_unavailable(conn: psycopg.Connection, product_id: int, message: str, *
     )
 
 
-def receive(conn: psycopg.Connection, actor: User, product_id: int, quantity: int, reason: str | None = None) -> dict:
+def receive(conn: DBConn, actor: User, product_id: int, quantity: int, reason: str | None = None) -> dict:
     """Delivery: physical +quantity, reserved unchanged."""
     require_manager(actor)
     require_positive_quantity(quantity)
@@ -99,7 +96,7 @@ def receive(conn: psycopg.Connection, actor: User, product_id: int, quantity: in
     return inventory_out(inv)
 
 
-def adjust(conn: psycopg.Connection, actor: User, product_id: int, delta: int, reason: str) -> dict:
+def adjust(conn: DBConn, actor: User, product_id: int, delta: int, reason: str) -> dict:
     """Manual correction (e.g. spoilage = negative delta).
 
     The stock check is part of the UPDATE: physical stock may never drop below
@@ -130,6 +127,7 @@ def adjust(conn: psycopg.Connection, actor: User, product_id: int, delta: int, r
                 "Adjustment would leave physical stock below reserved stock",
                 requested_delta=delta,
             )
+        assert inv is not None
         audit.record(
             conn,
             actor_id=actor.id,

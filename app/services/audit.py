@@ -2,15 +2,15 @@
 
 from __future__ import annotations
 
-from typing import Any, Mapping
+from collections.abc import Mapping
+from typing import Any
 
-import psycopg
-
+from app.db import DBConn
 from app.services.common import audit_out
 
 
 def record(
-    conn: psycopg.Connection,
+    conn: DBConn,
     *,
     actor_id: int | None,
     action: str,
@@ -42,7 +42,7 @@ def record(
     )
 
 
-def list_events(conn: psycopg.Connection, *, product_id: int | None = None, limit: int = 100) -> list[dict]:
+def list_events(conn: DBConn, *, product_id: int | None = None, limit: int = 100) -> list[dict]:
     rows = conn.execute(
         """
         SELECT a.*, u.username AS actor_username, p.sku

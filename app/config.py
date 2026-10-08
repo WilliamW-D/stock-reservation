@@ -14,7 +14,7 @@ class Settings:
     pool_max_size: int = 20
 
     @classmethod
-    def from_env(cls) -> "Settings":
+    def from_env(cls) -> Settings:
         defaults = cls()
         return cls(
             database_url=os.getenv("DATABASE_URL", defaults.database_url),

@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import secrets
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import jwt
 
@@ -33,7 +33,7 @@ def verify_password(password: str, stored: str) -> bool:
 
 
 def create_access_token(user_id: int, role: str, *, secret: str, ttl_minutes: int) -> str:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     payload = {"sub": str(user_id), "role": role, "iat": now, "exp": now + timedelta(minutes=ttl_minutes)}
     return jwt.encode(payload, secret, algorithm=_ALGORITHM)
 

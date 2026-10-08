@@ -17,12 +17,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any
 
-import psycopg
 from psycopg.types.json import Jsonb
 
+from app.db import DBConn
 from app.errors import IdempotencyConflict, InvalidRequest
 
 MAX_KEY_LENGTH = 255
@@ -50,7 +51,7 @@ def fingerprint(scope: str, payload: dict[str, Any]) -> str:
 
 
 def run_idempotent(
-    conn: psycopg.Connection,
+    conn: DBConn,
     *,
     user_id: int,
     key: str,

@@ -16,9 +16,10 @@ from __future__ import annotations
 
 import threading
 import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any
 
 import psycopg
 
@@ -55,9 +56,7 @@ def wait_until_blocked(observer: psycopg.Connection, backend_pid: int, timeout: 
     """Return True once PostgreSQL reports ``backend_pid`` is waiting on a lock."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        row = observer.execute(
-            "SELECT wait_event_type FROM pg_stat_activity WHERE pid = %s", (backend_pid,)
-        ).fetchone()
+        row = observer.execute("SELECT wait_event_type FROM pg_stat_activity WHERE pid = %s", (backend_pid,)).fetchone()
         if row and row["wait_event_type"] == "Lock":
             return True
         time.sleep(0.01)

@@ -31,11 +31,11 @@ def test_cancel_and_fulfill_race_only_one_wins(world, conn, new_conn):
 
         rid = new_reservation(conn, world.eli, world.cheese)
         ops = [
-            lambda c: reservations.cancel(c, world.eli, rid),  # employee cancels their order
-            lambda c: reservations.fulfill(c, world.manager, rid),  # manager ships it
+            lambda c, res_id=rid: reservations.cancel(c, world.eli, res_id),  # employee cancels their order
+            lambda c, res_id=rid: reservations.fulfill(c, world.manager, res_id),  # manager ships it
         ]
 
-        outcomes = run_concurrently([new_conn(), new_conn()], lambda c, n: ops[n](c))
+        outcomes = run_concurrently([new_conn(), new_conn()], lambda c, n, op_list=ops: op_list[n](c))
 
         winners = [o for o in outcomes if o.ok]
         losers = [o for o in outcomes if not o.ok]
@@ -45,11 +45,14 @@ def test_cancel_and_fulfill_race_only_one_wins(world, conn, new_conn):
         status = winners[0].value["reservation"]["status"]
         expected_on_hand = on_hand_before if status == "cancelled" else on_hand_before - 2
         assert stock(conn, world.cheese) == (expected_on_hand, 0)
-        assert count(
-            conn,
-            "SELECT 1 FROM audit_events WHERE reservation_id = %s AND action IN ('cancel','fulfill')",
-            (rid,),
-        ) == 1
+        assert (
+            count(
+                conn,
+                "SELECT 1 FROM audit_events WHERE reservation_id = %s AND action IN ('cancel','fulfill')",
+                (rid,),
+            )
+            == 1
+        )
 
 
 def test_second_transition_waits_on_the_row_lock_and_sees_the_new_status(world, conn, new_conn):
@@ -129,11 +132,17 @@ def test_expiry_racing_with_cancel_closes_once(world, conn, new_conn):
     for _ in range(10):
         rid = new_reservation(conn, world.eli, world.cheese, quantity=1)
         force_past_due(conn, rid)
-        ops = [lambda c: reservations.expire_due(c), lambda c: reservations.cancel(c, world.eli, rid)]
-        run_concurrently([new_conn(), new_conn()], lambda c, n: ops[n](c))
-        assert count(
-            conn,
-            "SELECT 1 FROM audit_events WHERE reservation_id = %s AND action IN ('cancel','expire')",
-            (rid,),
-        ) == 1
+        ops = [
+            lambda c, res_id=rid: reservations.expire_due(c),
+            lambda c, res_id=rid: reservations.cancel(c, world.eli, res_id),
+        ]
+        run_concurrently([new_conn(), new_conn()], lambda c, n, op_list=ops: op_list[n](c))
+        assert (
+            count(
+                conn,
+                "SELECT 1 FROM audit_events WHERE reservation_id = %s AND action IN ('cancel','expire')",
+                (rid,),
+            )
+            == 1
+        )
     assert stock(conn, world.cheese) == (5, 0)

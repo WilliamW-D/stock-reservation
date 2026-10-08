@@ -1,7 +1,7 @@
 """Developer commands.
 
-    uv run python -m app.cli init-db   # create tables (idempotent)
-    uv run python -m app.cli seed      # 5 cases of cheese, 1 manager, 2 employees
+uv run python -m app.cli init-db   # create tables (idempotent)
+uv run python -m app.cli seed      # 5 cases of cheese, 1 manager, 2 employees
 """
 
 from __future__ import annotations
@@ -34,6 +34,7 @@ def seed(url: str) -> None:
                 users.create_user(conn, username, password, role)
                 print(f"created {role} {username!r} (password: {password})")
         manager = users.get_user_by_username(conn, "maria")
+        assert manager is not None, "Manager 'maria' must exist after seeding users"
         exists = conn.execute("SELECT id FROM products WHERE sku = %s", (CHEESE_SKU,)).fetchone()
         if exists is None:
             product = inventory.create_product(conn, manager, sku=CHEESE_SKU, name="Cheddar cheese", unit="case")

@@ -5,9 +5,10 @@
 # CurrentUser, ...) are defined inside create_app().
 import logging
 import threading
+from collections.abc import Iterator
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Annotated, Iterator, Literal
+from typing import Annotated, Literal
 
 import psycopg
 from fastapi import Depends, FastAPI, Header, Query, Request
@@ -17,7 +18,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
 from app.config import Settings
-from app.db import create_pool
+from app.db import DBConn, create_pool
 from app.errors import AuthenticationError, DomainError
 from app.security import create_access_token, decode_access_token
 from app.services import audit, idempotency, inventory, reservations, users
@@ -138,11 +139,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # ------------------------------------------------------------ deps
     oauth2 = OAuth2PasswordBearer(tokenUrl="/auth/token", auto_error=False)
 
-    def get_conn(request: Request) -> Iterator[psycopg.Connection]:
+    def get_conn(request: Request) -> Iterator[DBConn]:
         with request.app.state.pool.connection() as conn:
             yield conn
 
-    Conn = Annotated[psycopg.Connection, Depends(get_conn)]
+    Conn = Annotated[DBConn, Depends(get_conn)]
 
     def current_user(conn: Conn, token: Annotated[str | None, Depends(oauth2)]) -> User:
         if not token:

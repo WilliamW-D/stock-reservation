@@ -14,7 +14,7 @@ import pytest
 from psycopg import sql
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
 
-from app.db import apply_schema, connect, create_pool
+from app.db import connect, run_migrations
 from app.services import inventory, users
 
 TEST_DATABASE_URL = os.getenv("TEST_DATABASE_URL", "postgresql://stock:stock@localhost:5433/stock_test")
@@ -35,8 +35,7 @@ def database_url() -> str:
     with admin:
         admin.execute(sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(sql.Identifier(dbname)))
         admin.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(dbname)))
-    with connect(TEST_DATABASE_URL) as conn:
-        apply_schema(conn)
+    run_migrations(TEST_DATABASE_URL)
     return TEST_DATABASE_URL
 
 

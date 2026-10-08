@@ -9,8 +9,7 @@
 
 from __future__ import annotations
 
-import psycopg
-
+from app.db import DBConn
 from app.errors import InvalidRequest, InvalidTransition, NotFound
 from app.services import audit, idempotency
 from app.services.common import User, inventory_out, require_positive_quantity, reservation_out
@@ -61,7 +60,7 @@ def _validate_create(product_id: object, quantity: object, order_reference: obje
 
 
 def create_reservation(
-    conn: psycopg.Connection,
+    conn: DBConn,
     actor: User,
     *,
     product_id: int,
@@ -75,6 +74,7 @@ def create_reservation(
         inv = conn.execute(RESERVE_SQL, params).fetchone()
         if inv is None:
             raise_unavailable(conn, product_id, "Not enough available stock", requested_quantity=quantity)
+        assert inv is not None
 
         reservation = conn.execute(
             """
@@ -84,6 +84,7 @@ def create_reservation(
             """,
             (product_id, actor.id, params["order_reference"], quantity, ttl_minutes),
         ).fetchone()
+        assert reservation is not None
 
         audit.record(
             conn,
@@ -101,7 +102,7 @@ def create_reservation(
 
 
 def create_reservation_idempotent(
-    conn: psycopg.Connection,
+    conn: DBConn,
     actor: User,
     idempotency_key: str | None,
     *,
@@ -128,9 +129,7 @@ def _can_access(actor: User | None, reservation) -> bool:
     return actor.is_manager or reservation["user_id"] == actor.id
 
 
-def _transition(
-    conn: psycopg.Connection, actor: User | None, reservation_id: int, action: str, reason: str | None = None
-) -> dict:
+def _transition(conn: DBConn, actor: User | None, reservation_id: int, action: str, reason: str | None = None) -> dict:
     on_hand_factor, reserved_factor, new_status = TRANSITIONS[action]
 
     with conn.transaction():
@@ -185,6 +184,7 @@ def _transition(
             """,
             (on_hand_delta, reserved_delta, res["product_id"]),
         ).fetchone()
+        assert inv is not None
 
         # Status guard is redundant with the lock above; it is a cheap backstop.
         updated = conn.execute(
@@ -214,15 +214,15 @@ def _transition(
     return {"reservation": reservation_out(updated), "inventory": inventory_out(inv)}
 
 
-def cancel(conn: psycopg.Connection, actor: User, reservation_id: int, reason: str | None = None) -> dict:
+def cancel(conn: DBConn, actor: User, reservation_id: int, reason: str | None = None) -> dict:
     return _transition(conn, actor, reservation_id, "cancel", reason or "Cancelled")
 
 
-def fulfill(conn: psycopg.Connection, actor: User, reservation_id: int, reason: str | None = None) -> dict:
+def fulfill(conn: DBConn, actor: User, reservation_id: int, reason: str | None = None) -> dict:
     return _transition(conn, actor, reservation_id, "fulfill", reason or "Fulfilled")
 
 
-def expire_due(conn: psycopg.Connection, *, limit: int = 500) -> int:
+def expire_due(conn: DBConn, *, limit: int = 500) -> int:
     """Expire active reservations past their expiry time. Each one is its own transaction."""
     due_ids = [
         r["id"]
@@ -241,7 +241,7 @@ def expire_due(conn: psycopg.Connection, *, limit: int = 500) -> int:
     return expired
 
 
-def get_reservation(conn: psycopg.Connection, actor: User, reservation_id: int) -> dict:
+def get_reservation(conn: DBConn, actor: User, reservation_id: int) -> dict:
     row = conn.execute(
         """
         SELECT r.*, u.username, p.sku
@@ -255,9 +255,7 @@ def get_reservation(conn: psycopg.Connection, actor: User, reservation_id: int) 
     return reservation_out(row)
 
 
-def list_reservations(
-    conn: psycopg.Connection, actor: User, *, status: str | None = None, limit: int = 100
-) -> list[dict]:
+def list_reservations(conn: DBConn, actor: User, *, status: str | None = None, limit: int = 100) -> list[dict]:
     rows = conn.execute(
         """
         SELECT r.*, u.username, p.sku

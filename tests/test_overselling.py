@@ -24,8 +24,8 @@ def test_two_connections_race_for_the_last_unit(world, conn, new_conn):
 
         outcomes = run_concurrently(
             clients,
-            lambda c, n: reservations.create_reservation(
-                c, actors[n], product_id=product, quantity=1, order_reference=f"order-{i}-{n}"
+            lambda c, n, p=product, act=actors, round_i=i: reservations.create_reservation(
+                c, act[n], product_id=p, quantity=1, order_reference=f"order-{round_i}-{n}"
             ),
         )
 
